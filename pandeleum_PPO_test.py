@@ -7,9 +7,9 @@ import gymnasium as gym
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 
-class GaussianActor_mu(nn.Module):
+class Actor(nn.Module):
 	def __init__(self, state_dim, action_dim, net_width, log_std=0):
-		super(GaussianActor_mu, self).__init__()
+		super(Actor, self).__init__()
 
 		self.l1 = nn.Linear(state_dim, net_width)
 		self.l2 = nn.Linear(net_width, net_width)
@@ -46,7 +46,7 @@ torch.manual_seed(0)
 torch.cuda.manual_seed(0)
 
 # Initialize the Actor network and move it to the device (GPU or CPU)
-actor = GaussianActor_mu(state_dim, action_dim, net_width).to(device)
+actor = Actor(state_dim, action_dim, net_width).to(device)
 
 # Load the pre-trained model weights for the Actor network
 actor.load_state_dict(torch.load("your model name")) # like "Pendulum-123.pt"
