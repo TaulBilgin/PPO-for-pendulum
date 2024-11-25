@@ -10,9 +10,9 @@ import gymnasium as gym
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 
-class GaussianActor_mu(nn.Module):
+class Actor(nn.Module):
 	def __init__(self, state_dim, action_dim, net_width, log_std=0):
-		super(GaussianActor_mu, self).__init__()
+		super(Actor, self).__init__()
 
 		self.l1 = nn.Linear(state_dim, net_width)
 		self.l2 = nn.Linear(net_width, net_width)
@@ -91,7 +91,7 @@ class PPO_agent():
 		self.l2_reg = l2_reg
 
 		# Choose distribution for the actor
-		self.actor = GaussianActor_mu(self.state_dim, self.action_dim, self.net_width).to(device)
+		self.actor = Actor(self.state_dim, self.action_dim, self.net_width).to(device)
 		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=a_lr)
 
 		# Build Critic
