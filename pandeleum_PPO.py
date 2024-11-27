@@ -136,21 +136,21 @@ class PPO_agent():
 		self.entropy_coef*=self.entropy_coef_decay
 
 		'''Prepare PyTorch data from Numpy data'''
-		now_state = self.s_hoder
-		action = self.a_hoder
-		reward = self.r_hoder
-		next_state = self.s_next_hoder
-		logprob_action = self.logprob_a_hoder
+		s = self.s_hoder
+		a = self.a_hoder
+		r = self.r_hoder
+		s_next = self.s_next_hoder
+		logprob_a = self.logprob_a_hoder
 		done = self.done_hoder
 		dw = self.dw_hoder
 
 		''' Use TD+GAE+LongTrajectory to compute Advantage and TD target'''
 		with torch.no_grad():
-			value = self.critic(now_state)
-			next_value = self.critic(next_state)
+			vs = self.critic(s)
+			vs_ = self.critic(s_next)
 
 			'''dw for TD_target and Adv'''
-			deltas = reward + self.gamma * next_value * (1-dw) - value
+			deltas = r + self.gamma * vs_ * (1-dw) - vs
 			deltas = deltas.cpu().flatten().numpy()
 			adv = [0]
 
@@ -161,56 +161,43 @@ class PPO_agent():
 			adv.reverse()
 			adv = copy.deepcopy(adv[0:-1])
 			adv = torch.tensor(adv).unsqueeze(1).float().to(device)
-			td_target = adv + value
+			td_target = adv + vs
 			adv = (adv - adv.mean()) / ((adv.std()+1e-4))  #sometimes helps
 
 
 		"""Slice long trajectopy into short trajectory and perform mini-batch PPO update"""
-		a_optim_iter_num = int(math.ceil(now_state.shape[0] / self.a_optim_batch_size))
-		c_optim_iter_num = int(math.ceil(now_state.shape[0] / self.c_optim_batch_size))
+		a_optim_iter_num = int(math.ceil(s.shape[0] / self.a_optim_batch_size))
+		c_optim_iter_num = int(math.ceil(s.shape[0] / self.c_optim_batch_size))
 		for i in range(self.K_epochs):
+
 			#Shuffle the trajectory, Good for training
-			perm = np.arange(now_state.shape[0])
+			perm = np.arange(s.shape[0])
 			np.random.shuffle(perm)
 			perm = torch.LongTensor(perm).to(device)
-			clone_now_state, clone_action, clone_td_target, clone_adv, clone_logprob_action = \
-				now_state[perm].clone(), action[perm].clone(), td_target[perm].clone(), adv[perm].clone(), logprob_action	[perm].clone()
+			s, a, td_target, adv, logprob_a = \
+				s[perm].clone(), a[perm].clone(), td_target[perm].clone(), adv[perm].clone(), logprob_a[perm].clone()
 
 			'''update the actor'''
 			for i in range(a_optim_iter_num):
-				index = slice(i * self.a_optim_batch_size, min((i + 1) * self.a_optim_batch_size, clone_now_state.shape[0]))
-				distribution = self.actor.get_dist(clone_now_state[index])
+				index = slice(i * self.a_optim_batch_size, min((i + 1) * self.a_optim_batch_size, s.shape[0]))
+				distribution = self.actor.get_dist(s[index])
 				dist_entropy = distribution.entropy().sum(1, keepdim=True)
-				
-				# Get log probabilities of the actions under current policy
-				logprob_a_now = distribution.log_prob(action[index])
-				
-				# Calculate probability ratio between new and old policies
-				# ratio = π_new(a|s) / π_old(a|s)
-				# Using log probabilities: ratio = exp(log(π_new) - log(π_old))
-				ratio = torch.exp(logprob_a_now.sum(1,keepdim=True) - 
-								 logprob_action[index].sum(1,keepdim=True))
+				logprob_a_now = distribution.log_prob(a[index])
+				ratio = torch.exp(logprob_a_now.sum(1,keepdim=True) - logprob_a[index].sum(1,keepdim=True))  # a/b == exp(log(a)-log(b))
 
-				# Calculate surrogate objectives for PPO's clipped objective
-				surr1 = ratio * adv[index]  # Standard policy gradient
-				# Clip the ratio to prevent too large policy updates
+				surr1 = ratio * adv[index]
 				surr2 = torch.clamp(ratio, 1 - self.clip_rate, 1 + self.clip_rate) * adv[index]
-				
-				# Calculate final loss (negative because we want to maximize the objective)
-				# Take minimum of standard and clipped objectives (PPO's pessimistic bound)
-				# Subtract entropy term to encourage exploration
 				a_loss = -torch.min(surr1, surr2) - self.entropy_coef * dist_entropy
 
-				# Perform gradient update
-				self.actor_optimizer.zero_grad()  # Clear previous gradients
-				a_loss.mean().backward()  # Compute gradients
-				torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 40)  # Clip gradients to prevent explosion
-				self.actor_optimizer.step()  # Update network parameters
+				self.actor_optimizer.zero_grad()
+				a_loss.mean().backward()
+				torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 40)
+				self.actor_optimizer.step()
 
 			'''update the critic'''
 			for i in range(c_optim_iter_num):
-				index = slice(i * self.c_optim_batch_size, min((i + 1) * self.c_optim_batch_size, clone_now_state.shape[0]))
-				c_loss = (self.critic(clone_now_state[index]) - td_target[index]).pow(2).mean()
+				index = slice(i * self.c_optim_batch_size, min((i + 1) * self.c_optim_batch_size, s.shape[0]))
+				c_loss = (self.critic(s[index]) - td_target[index]).pow(2).mean()
 				for name,param in self.critic.named_parameters():
 					if 'weight' in name:
 						c_loss += param.pow(2).sum() * self.l2_reg
